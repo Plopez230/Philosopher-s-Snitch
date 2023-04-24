@@ -14,21 +14,10 @@ Date: 2023-04-19
 import sys
 
 
-class Colors:
-    """
-    Custom class for defining color codes for console output.
-
-    Attributes:
-        ENDC (str): Reset color code.
-        INPUT (str): Color code for input messages.
-        ERROR (str): Color code for error messages.
-        DEBUG (str): Color code for debug messages.
-    """
-
-    ENDC = "\033[0m"
-    INPUT = "\033[0m\033[1m"
-    ERROR = "\033[0m\033[91m\033[1m"
-    DEBUG = "\033[0m\033[93m\033[1m"
+ENDC = "\033[0m"
+INPUT = "\033[0m\033[1m"
+ERROR = "\033[0m\033[91m\033[1m"
+DEBUG = "\033[0m\033[93m\033[1m"
 
 
 class PhilosopherError(Exception):
@@ -39,7 +28,7 @@ class PhilosopherError(Exception):
         msgs (list): List of error messages.
     """
 
-    def __init__(self, msgs, references):
+    def __init__(self, source, msgs, records):
         """
         Initialize the PhilosopherError instance.
 
@@ -50,9 +39,9 @@ class PhilosopherError(Exception):
         super().__init__()
         self.msgs = []
         self.msgs.extend(msgs)
-        references = [ref for ref in references if ref]
-        references.sort(key=lambda x: x[0])
-        self.msgs.extend([ref[3] for ref in references])
+        records = [ref for ref in records if ref]
+        records.sort(key=lambda x: x[0])
+        self.msgs.extend([ref[3] + f" ({source[0] - ref[0]} ms ago)" for ref in records])
         self.args = self.msgs
 
 
@@ -62,8 +51,6 @@ class PhilosopherDebugInfo(PhilosopherError):
 
     Inherits from PhilosopherError class.
     """
-
-    pass
 
 
 def read_command_line_arguments(args):
@@ -102,8 +89,8 @@ def read_command_line_arguments(args):
         config["time to sleep"] = int(args[3])
         if len(args) == 5:
             config["number of times each philosopher must eat"] = int(args[4])
-    except ValueError:
-        raise ValueError("Error: Arguments must be integers.")
+    except ValueError as exc:
+        raise ValueError("Error: Arguments must be integers.") from exc
     if len(args) not in [4, 5]:
         raise ValueError("Error: 4 or 5 integers must be specified.")
     return config
@@ -122,7 +109,7 @@ def read_record(string):
         string (str): The input string to be parsed.
 
     Returns:
-        tuple: A tuple containing extracted information from the input string.
+        record: A tuple containing extracted information from the input string.
 
     Raises:
         ValueError: If the first two elements of the input string are not
@@ -132,13 +119,13 @@ def read_record(string):
     try:
         num1 = int(parts[0])
         num2 = int(parts[1])
-    except ValueError:
+    except Exception as exc:
         raise ValueError(
             "The first two elements of the string must be integers."
-        )
+        ) from exc
     remaining_part = " ".join(parts[2:])
-    tuple = (num1, num2, remaining_part, " ".join(parts))
-    return tuple
+    record = (num1, num2, remaining_part, " ".join(parts))
+    return record
 
 
 def update_state(philosophers_dict, config_dict, action_record):
@@ -192,15 +179,15 @@ def update_state(philosophers_dict, config_dict, action_record):
 
 
 def process_philosopher_record(
-    philosophers, table_config, line, tests, log_file=None
+    philosophers_dict, config_dict, line, tests, log_file=None
 ):
     """
     Process a philosopher record by performing tests, logging errors and debug
     information, and updating the state.
 
     Args:
-        philosophers (dict): A dictionary of philosophers.
-        table_config (dict): A configuration dictionary for the table.
+        philosophers_dict (dict): A dictionary of philosophers.
+        config_dict (dict): A configuration dictionary for the table.
         line (str): A line representing a philosopher record.
         log_file (Optional[file]): An optional log file to write the output.
             Defaults to None.
@@ -210,12 +197,12 @@ def process_philosopher_record(
 
     Notes:
         - This function processes a philosopher record by performing tests on
-            the record using the `philosophers`, `table_config`, and `record`
+            the record using the `philosophers_dict`, `config_dict`, and `record`
             information.
         - If any errors or debug information is encountered during the tests,
             they are logged to the `log_file` if provided, otherwise printed to
             the console.
-        - The `philosophers` dictionary is updated with the new record
+        - The `philosophers_dict` dictionary is updated with the new record
             information using the `update_state` function.
         - Any unexpected input in the `line` will result in an error message
             appended to the `errors` list.
@@ -226,21 +213,24 @@ def process_philosopher_record(
     debug = []
     try:
         record = read_record(line)
-    except ValueError as e:
+    except ValueError:
+        record = None
         errors.append("Unexpected input")
     if record:
         for test in tests:
             try:
-                test(philosophers, table_config, record)
-            except PhilosopherDebugInfo as e:
-                if "debug" in table_config:
-                    debug.extend(e.args)
-            except PhilosopherError as e:
-                errors.extend(e.args)
-            except Exception as e:
-                errors.append(Colors.ENDC + str(e))
+                test(
+                    philosophers_dict=philosophers_dict,
+                    config_dict=config_dict,
+                    action_record=record,
+                )
+            except PhilosopherDebugInfo as exc:
+                if "debug" in config_dict:
+                    debug.extend(exc.args)
+            except PhilosopherError as exc:
+                errors.extend(exc.args)
     print_line_info(line, errors, debug, log_file)
-    update_state(philosophers, table_config, record)
+    update_state(philosophers_dict, config_dict, record)
 
 
 def print_line_info(line, errors, debug, log_file=None):
@@ -261,24 +251,24 @@ def print_line_info(line, errors, debug, log_file=None):
         log_file (file, optional): An optional log file to write the error
             messages to.
     """
-    input_color = Colors.INPUT
+    input_color = INPUT
     msgs = []
     if errors:
-        msgs.extend([(Colors.ERROR, ". " + d) for d in errors])
-        input_color = Colors.ERROR
+        msgs.extend([(ERROR, ". " + d) for d in errors])
+        input_color = ERROR
     if debug:
-        msgs.extend([(Colors.DEBUG, ". " + d) for d in debug])
+        msgs.extend([(DEBUG, ". " + d) for d in debug])
     if not msgs:
         msgs = [("", "")]
     start = " ".join(line.split())
-    for m in msgs:
-        print("\n%s%-36s%s%s" % (input_color, start, m[0], m[1]), end="")
-        if input_color == Colors.ERROR and log_file:
-            log_file.write("\n%-36s%s" % (start, m[1]))
+    for msg in msgs:
+        print(f"\n{input_color}{start : <36}{msg[0]}{msg[1]}", end="")
+        if input_color == ERROR and log_file:
+            log_file.write(f"\n{start : <36}{msg[1]}")
         start = ""
 
 
-def check_time_travel(philosophers, config, record):
+def check_time_travel(**kwargs):
     """
     This function checks if a philosopher has traveled through time based on the
     record of an action. The input parameters are a dictionary of philosophers,
@@ -290,28 +280,32 @@ def check_time_travel(philosophers, config, record):
     philosopher's name and the amount of time traveled.
 
     Args:
-        philosophers (dict): A dictionary of philosophers.
-        config (dict): A configuration dictionary.
-        record (tuple): A record containing information about an action
+        philosophers_dict (dict): A dictionary of philosophers.
+        config_dict (dict): A configuration dictionary.
+        action_record (tuple): A record containing information about an action
             performed by a philosopher.
 
     Raises:
         PhilosopherError: If a philosopher has traveled through time.
     """
-    last_update = config.get("last update", 0)
-    update = config.get("last record", (0, 0, 0, ""))
-    travel = last_update - record[0]
+    config_dict = kwargs["config_dict"]
+    action_record = kwargs["action_record"]
+    last_update = config_dict.get("last update", 0)
+    update = config_dict.get("last record", None)
+    travel = last_update - action_record[0]
+    philosopher_id = action_record[1]
     if travel > 0:
         raise PhilosopherError(
+            action_record,
             [
-                f"{record[1]} has traveled through time",
-                f"At least {travel} miliseconds backwards in time.",
+                "ERROR: TIME TRAVEL",
+                f"{philosopher_id} traveled at least {travel} miliseconds backwards in time.",
             ],
             [update],
         )
 
 
-def check_philosopher_death(philosophers, config, record):
+def check_philosopher_death(**kwargs):
     """
     This function checks if a philosopher has died based on the record of an
     action. The input parameters are a dictionary of philosophers, a
@@ -322,26 +316,30 @@ def check_philosopher_death(philosophers, config, record):
     philosopher's name and a request for a minute of silence.
 
     Args:
-        philosophers (dict): A dictionary of philosophers.
-        config (dict): A configuration dictionary.
-        record (tuple): A record containing information about an action
+        philosophers_dict (dict): A dictionary of philosophers.
+        config_dict (dict): A configuration dictionary.
+        action_record (tuple): A record containing information about an action
             performed by a philosopher.
 
     Raises:
         PhilosopherError: If a philosopher has died.
     """
-    dead = config.get("last died", None)
-    if dead:
+    config_dict = kwargs["config_dict"]
+    action_record = kwargs["action_record"]
+    dead_record = config_dict.get("last died", (0, 0, 0, ""))
+    dead_philosopher_id = dead_record[1]
+    if dead_philosopher_id:
         raise PhilosopherError(
+            action_record,
             [
-                f"{record[1]} shhh!",
-                f"Let's take a minute of silence for {dead[1]}.",
+                "ERROR: DEAD PHILOSOPHER.",
+                f"Let's take a minute of silence for {dead_philosopher_id}.",
             ],
-            [dead],
+            [dead_record],
         )
 
 
-def check_strange_smell(philosophers, config, record):
+def check_strange_smell(**kwargs):
     """
     This function checks for any strange smell among the philosophers based on
     their recent actions and time to die. The input parameters are a dictionary
@@ -353,40 +351,59 @@ def check_strange_smell(philosophers, config, record):
     indicating a strange smell and the expected time of death.
 
     Args:
-        philosophers (dict): A dictionary of philosophers.
-        config (dict): A configuration dictionary.
-        record (tuple): A record containing information about an action
+        philosophers_dict (dict): A dictionary of philosophers.
+        config_dict (dict): A configuration dictionary.
+        action_record (tuple): A record containing information about an action
             performed by a philosopher.
 
     Raises:
         PhilosopherError: If a strange smell is detected among the philosophers.
     """
-    time_to_die = config["time to die"]
-    init_smell = record[0] - time_to_die
-    for p in range(1, config["number of philosophers"]):
-        if p not in philosophers and init_smell > 10:
+    philosophers_dict = kwargs["philosophers_dict"]
+    config_dict = kwargs["config_dict"]
+    action_record = kwargs["action_record"]
+    time_to_die = config_dict["time to die"]
+    init_smell = action_record[0] - time_to_die
+    for philosopher_id in range(1, config_dict["number of philosophers"]):
+        if philosopher_id not in philosophers_dict and init_smell > 10:
             raise PhilosopherError(
+                action_record,
                 [
-                    f"Has a strange smell",
-                    f"{p} should have died {init_smell} ms ago.",
+                    "Has a strange smell",
+                    f"{philosopher_id} should have died {init_smell} ms ago.",
                 ],
                 [],
             )
-        if p in philosophers:
-            last_is_eating = philosophers[p].get("last is eating", (0,))
-            smell = record[0] - last_is_eating[0] - time_to_die
+        if philosopher_id in philosophers_dict:
+            last_is_eating = philosophers_dict[philosopher_id].get(
+                "last is eating", (0,)
+            )
+            smell = action_record[0] - last_is_eating[0] - time_to_die
             if smell > 10:
                 raise PhilosopherError(
+                    action_record,
                     [
-                        f"Has a strange smell",
-                        f"{p} should have died {smell} ms ago.",
+                        "ERROR: STRANGE SMELL.",
+                        f"{philosopher_id} should have died {smell} ms ago.",
                         f"Time to die: {time_to_die}",
                     ],
-                    [philosophers[p].get("last is eating", None)],
+                    [
+                        philosophers_dict[philosopher_id].get(
+                            "last is eating", None
+                        )
+                    ],
                 )
+    philosopher_id = action_record[1]
+    philosopher = philosophers_dict.get(philosopher_id, {})
+    last_is_eating = philosopher.get("last is eating", (0,))
+    time_remaining = time_to_die - (action_record[0] - last_is_eating[0])
+    raise PhilosopherDebugInfo(
+        action_record,
+        [f"time to die: {time_remaining} ms"], []
+    )
 
 
-def check_eating_habits(philosophers, config, record):
+def check_eating_habits(**kwargs):
     """
     This function checks if a philosopher has eaten too little based on their
     recent actions and the configured time to eat. The input parameters are a
@@ -398,35 +415,43 @@ def check_eating_habits(philosophers, config, record):
     with an error message indicating that the philosopher has eaten too little.
 
     Args:
-        philosophers (dict): A dictionary of philosophers.
-        config (dict): A configuration dictionary.
-        record (tuple): A record containing information about an action
+        philosophers_dict (dict): A dictionary of philosophers.
+        config_dict (dict): A configuration dictionary.
+        action_record (tuple): A record containing information about an action
             performed by a philosopher.
 
     Raises:
         PhilosopherError: If the philosopher has eaten too little.
     """
-    if record[2] == "is sleeping":
-        time_to_eat = config["time to eat"]
-        p = philosophers.get(record[1], {})
-        last_time_eat = p.get("last is eating", (0,))
-        time_eating = record[0] - last_time_eat[0]
+    philosophers_dict = kwargs["philosophers_dict"]
+    config_dict = kwargs["config_dict"]
+    action_record = kwargs["action_record"]
+    if action_record[2] == "is sleeping":
+        time_to_eat = config_dict["time to eat"]
+        philosopher_id = action_record[1]
+        philosopher = philosophers_dict.get(philosopher_id, {})
+        last_time_eat = philosopher.get("last is eating", (0,))
+        time_eating = action_record[0] - last_time_eat[0]
         if time_eating < time_to_eat:
             raise PhilosopherError(
+                action_record,
                 [
-                    f"Has eaten too little",
-                    f"{record[1]} has been eating only {time_eating} ms.",
+                    "ERROR: ATE TOO LITTLE.",
+                    f"{action_record[1]} has been eating only {time_eating} ms.",
                     f"Time to eat: {time_to_eat}",
                 ],
-                [p.get("last is eating", None)],
+                [philosopher.get("last is eating", None)],
             )
+        times_eat = philosopher.get("times eat", 0)
         raise PhilosopherDebugInfo(
-            [f"Has been eating {time_eating} ms."],
-            [p.get("last is eating", None)],
+            action_record,
+            [f"Has been eating {time_eating} ms.",
+             f"{philosopher_id} ate {times_eat} times"],
+            [philosopher.get("last is eating", None)],
         )
 
 
-def check_wakeup_time(philosophers, config, record):
+def check_wakeup_time(**kwargs):
     """
     This function checks if a philosopher woke up early based on their most
     recent thinking action and the configured sleep time. The input parameters
@@ -438,35 +463,40 @@ def check_wakeup_time(philosophers, config, record):
     message indicating that the philosopher woke up early.
 
     Args:
-        philosophers (dict): A dictionary of philosophers.
-        config (dict): A configuration dictionary.
-        record (tuple): A record containing information about an action 
+        philosophers_dict (dict): A dictionary of philosophers.
+        config_dict (dict): A configuration dictionary.
+        action_record (tuple): A record containing information about an action
             performed by a philosopher.
 
     Raises:
         PhilosopherError: If the philosopher woke up early.
     """
-    if record[2] == "is thinking":
-        time_to_sleep = config["time to sleep"]
-        p = philosophers.get(record[1], {})
-        last_time_sleep = p.get("last is sleeping", (0,))
-        time_sleeping = record[0] - last_time_sleep[0]
+    philosophers_dict = kwargs["philosophers_dict"]
+    config_dict = kwargs["config_dict"]
+    action_record = kwargs["action_record"]
+    if action_record[2] == "is thinking":
+        time_to_sleep = config_dict["time to sleep"]
+        philosopher = philosophers_dict.get(action_record[1], {})
+        last_time_sleep = philosopher.get("last is sleeping", (0,))
+        time_sleeping = action_record[0] - last_time_sleep[0]
         if time_sleeping < time_to_sleep:
             raise PhilosopherError(
+                action_record,
                 [
-                    f"Woke up early",
-                    f"{record[1]} has been sleeping only {time_sleeping} ms.",
+                    "ERROR: WOKE UP EARLY.",
+                    f"{action_record[1]} has been sleeping only {time_sleeping} ms.",
                     f"Time to sleep: {time_to_sleep}",
                 ],
-                [p.get("last is sleeping", None)],
+                [philosopher.get("last is sleeping", None)],
             )
         raise PhilosopherDebugInfo(
+            action_record,
             [f"Has been sleeping {time_sleeping} ms."],
-            [p.get("last is sleeping", None)],
+            [philosopher.get("last is sleeping", None)],
         )
 
 
-def check_fork_duplication(philosophers, config, record):
+def check_fork_duplication(**kwargs):
     """
     This function checks if a philosopher has duplicated a fork , based on the
     recent actions recorded in the `philosophers` dictionary and the
@@ -483,32 +513,35 @@ def check_fork_duplication(philosophers, config, record):
     or more forks.
 
     Args:
-        philosophers (dict): A dictionary of philosophers.
-        config (dict): A configuration dictionary.
-        record (tuple): A record containing information about an action
+        philosophers_dict (dict): A dictionary of philosophers.
+        config_dict (dict): A configuration dictionary.
+        action_record (tuple): A record containing information about an action
             performed by a philosopher.
 
     Raises:
         PhilosopherError: If the philosopher has taken a fork while already
             having a fork.
     """
-    if record[2] == "has taken a fork":
+    philosophers_dict = kwargs["philosophers_dict"]
+    config_dict = kwargs["config_dict"]
+    action_record = kwargs["action_record"]
+    if action_record[2] == "has taken a fork":
         references = []
-        phil = philosophers.get(record[1], {})
+        phil = philosophers_dict.get(action_record[1], {})
         free_forks = 0
         for direction in [1, -1]:
-            pos = record[1]
+            pos = action_record[1]
             available = -1
             while available == -1:
-                pos = (pos - 1 + direction) % config[
+                pos = (pos - 1 + direction) % config_dict[
                     "number of philosophers"
                 ] + 1
-                phil_pos = philosophers.get(pos, {})
+                phil_pos = philosophers_dict.get(pos, {})
                 phil_last_action = phil_pos.get(
                     "last action", (0, 0, "is sleeping", "")
                 )
                 references.append(phil_pos.get("last action", None))
-                if pos == record[1]:
+                if pos == action_record[1]:
                     available = 0
                     free_forks = 1
                 elif phil_last_action[2] in ["is sleeping", "is thinking"]:
@@ -523,21 +556,23 @@ def check_fork_duplication(philosophers, config, record):
         free_forks -= forks
         if free_forks <= 0:
             raise PhilosopherError(
+                action_record,
                 [
-                    f"Has a magic fork",
+                    "ERROR: MAGIC FORK.",
                     (
-                        f"{record[1]} picked up a fork "
+                        f"{action_record[1]} picked up a fork "
                         f"while already having {forks} forks"
                     ),
                 ],
                 list(set(references)),
             )
         raise PhilosopherDebugInfo(
+            action_record,
             [f"{free_forks} forks available"], list(set(references))
         )
 
 
-def check_valid_transition(philosophers, config, record):
+def check_valid_transition(**kwargs):
     """
     This function checks if a transition from the last action of a philosopher
     to the current action recorded in the `record` is valid, based on the
@@ -545,8 +580,8 @@ def check_valid_transition(philosophers, config, record):
     input parameters are a dictionary of philosophers, a configuration
     dictionary, and a record that contains information about an action performed
     by a philosopher. The function retrieves the last action of the philosopher
-    from the `philosophers` dictionary, and then checks if the current action in
-    the `record` is a valid transition from the last action, based on the valid
+    from the `philosophers_dict` dictionary, and then checks if the current action in
+    the `action_record` is a valid transition from the last action, based on the valid
     transitions defined in the `valid_transitions` dictionary. If the transition
     is not valid, the function raises a PhilosopherError with an error message
     indicating that the philosopher is playing another game, and provides the
@@ -555,16 +590,18 @@ def check_valid_transition(philosophers, config, record):
     transitions.
 
     Args:
-        philosophers (dict): A dictionary of philosophers.
-        config (dict): A configuration dictionary.
-        record (tuple): A record containing information about an action
+        philosophers_dict (dict): A dictionary of philosophers.
+        config_dict (dict): A configuration dictionary.
+        action_record (tuple): A record containing information about an action
             performed by a philosopher.
 
     Raises:
         PhilosopherError: If the transition from the last action is not valid.
     """
-    philosopher = philosophers.get(record[1], {})
-    last_action = philosophers.get(record[1], {}).get(
+    philosophers_dict = kwargs["philosophers_dict"]
+    action_record = kwargs["action_record"]
+    philosopher = philosophers_dict.get(action_record[1], {})
+    last_action = philosophers_dict.get(action_record[1], {}).get(
         "last action", (0, 0, "is thinking", "")
     )
     valid_transitions = {
@@ -580,15 +617,16 @@ def check_valid_transition(philosophers, config, record):
     }
     transitions = valid_transitions.get(last_action[2], [])
     t_msg = " or ".join(['"' + t + '"' for t in transitions])
-    if record[2] not in transitions:
+    if action_record[2] not in transitions:
         raise PhilosopherError(
-            [f"Is playing another game", f"Expected {t_msg}."],
+            action_record,
+            ["ERROR: INVALID TRANSITION", f"Expected {t_msg}."],
             [philosopher.get("last action", None)],
         )
-    raise PhilosopherDebugInfo([f"Expected {t_msg}."], [None])
+    raise PhilosopherDebugInfo(action_record,[f"Expected {t_msg}."], [None])
 
 
-def check_finish_eating(philosophers_dict, config_dict, action_record):
+def check_finish_eating(**kwargs):
     """
     Check if the condition for philosophers to finish eating is met.
 
@@ -604,6 +642,9 @@ def check_finish_eating(philosophers_dict, config_dict, action_record):
             times.
         PhilosopherDebugInfo: If there are philosophers left to finish eating.
     """
+    philosophers_dict = kwargs["philosophers_dict"]
+    config_dict = kwargs["config_dict"]
+    action_record = kwargs["action_record"]
     number_of_philosophers = config_dict.get("number of philosophers", 0)
     must_eat = number_of_philosophers
     number_of_times_must_eat = config_dict.get(
@@ -618,28 +659,29 @@ def check_finish_eating(philosophers_dict, config_dict, action_record):
             must_eat = must_eat - 1
     if must_eat == 0:
         raise PhilosopherError(
-            [f"All philosophers ate."],
+            action_record,
+            ["ERROR: ALL PHILOSOPHERS ATE."],
             [],
         )
-    if must_eat < 0:
-        must_eat = 0
+    must_eat = max(must_eat, 0)
     raise PhilosopherDebugInfo(
-        [f"there are {must_eat} philosophers left to finish."],
+        action_record,
+        [f"There are {must_eat} philosophers left to finish."],
         [],
     )
 
 
-def check_invitation(philosophers_dict, config_dict, action_record):
+def check_invitation(**kwargs):
     """
-    Checks if a philosopher's number in the action record matches the invited 
+    Checks if a philosopher's number in the action record matches the invited
     range.
 
     Args:
-        philosophers_dict (dict): A dictionary containing information about each 
+        philosophers_dict (dict): A dictionary containing information about each
             philosopher.
-        config_dict (dict): A dictionary containing configuration settings for 
+        config_dict (dict): A dictionary containing configuration settings for
             the dinner.
-        action_record (list): A list representing the action record of a 
+        action_record (list): A list representing the action record of a
             philosopher.
 
     Raises:
@@ -649,16 +691,22 @@ def check_invitation(philosophers_dict, config_dict, action_record):
     Returns:
         None
     """
+    config_dict = kwargs["config_dict"]
+    action_record = kwargs["action_record"]
     number_of_philosophers = config_dict.get("number of philosophers", 0)
     philosopher_number = action_record[1]
     if philosopher_number > number_of_philosophers or philosopher_number < 1:
         raise PhilosopherError(
-            [f"{philosopher_number} was not invited to dinner"],
-            []
+            action_record,
+            [
+                "ERROR: NOT INVITED",
+                f"philosopher number must be between 1 and {number_of_philosophers}",
+            ],
+            [],
         )
 
 
-def check_premature_death(philosophers_dict, config_dict, action_record):
+def check_premature_death(**kwargs):
     """
     Check if a philosopher has died prematurely based on the action records.
 
@@ -674,6 +722,9 @@ def check_premature_death(philosophers_dict, config_dict, action_record):
             includes the name of the philosopher and the remaining time he had
             ahead of him.
     """
+    philosophers_dict = kwargs["philosophers_dict"]
+    config_dict = kwargs["config_dict"]
+    action_record = kwargs["action_record"]
     if action_record[2] == "died":
         philosopher = philosophers_dict.get(action_record[1], {})
         time_to_die = config_dict["time to die"]
@@ -681,11 +732,12 @@ def check_premature_death(philosophers_dict, config_dict, action_record):
         time_remaining = time_to_die - (action_record[0] - last_is_eating)
         if time_remaining > 0:
             raise PhilosopherError(
+                action_record,
                 [
-                    f"Died prematurely.",
+                    "ERROR: DIED PREMATURELY.",
                     (
                         f"{action_record[1]} had his whole "
-                        f"{time_remaining} ms ahead of him"
+                        f"{time_remaining} ms ahead of him."
                     ),
                 ],
                 [philosopher.get("last is eating", None)],
@@ -693,12 +745,7 @@ def check_premature_death(philosophers_dict, config_dict, action_record):
 
 
 if __name__ == "__main__":
-
-    philosophers = {}
-    table_config = read_command_line_arguments(sys.argv[1:])
-    log_file = open("./log.snitch", "w")
-
-    tests = [
+    test_suite = [
         check_time_travel,
         check_philosopher_death,
         check_strange_smell,
@@ -708,10 +755,16 @@ if __name__ == "__main__":
         check_valid_transition,
         check_finish_eating,
         check_premature_death,
-        check_invitation
+        check_invitation,
     ]
 
-    for line in sys.stdin:
-        process_philosopher_record(philosophers, table_config, line, tests, log_file)
+    philosophers = {}
+    table_config = read_command_line_arguments(sys.argv[1:])
 
-    print(Colors.ENDC)
+    with open("./log.snitch", "w", encoding="utf8") as log:
+        for newline in sys.stdin:
+            process_philosopher_record(
+                philosophers, table_config, newline, test_suite, log
+            )
+
+    print(ENDC)
